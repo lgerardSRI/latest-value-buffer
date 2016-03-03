@@ -1,3 +1,7 @@
+
+# Clion configuration
+.idea
+
 # Compiled Object files
 *.slo
 *.lo
