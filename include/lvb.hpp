@@ -65,6 +65,9 @@ public:
            reading(&data[0].value), writing(&data[1].value),
            reading_pos(0), writing_pos(1) {}
 
+    Lvb(const Lvb&) = delete;
+    Lvb& operator=(const Lvb&) = delete;
+
     T * reading;
     T * writing;
 
