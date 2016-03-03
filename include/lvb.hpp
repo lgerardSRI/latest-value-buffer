@@ -8,7 +8,7 @@
 #include <atomic>
 
 #define INCR_MOD(X,M) (X+1>=M)?0:X+1
-
+#define DECR_MOD(X,M) (X-1<0)?M-1:X-1
 
 #ifndef L1CACHE_LINE_SIZE
 #error "Please provide a L1CACHE_LINE_SIZE definition, usually the job of cmake."
@@ -125,7 +125,7 @@ public:
      * determine a timeout of the writer.
      *
      */
-    int reader_advance() {
+    int reader_advance_one() {
         if (r.next == r.writer) { // We catched up with the position we know of the writer
             r.writer = writing_pos.load(std::memory_order_acquire);
             if (r.next == r.writer) { // The writer apparently did not move, we stall
@@ -146,42 +146,106 @@ public:
         return r.stale_cnt;
     }
 
+    int reader_advance() {
+        int writer = writing_pos.load(std::memory_order_acquire);
+        if (writer == r.writer) { // The writer apparently did not move, we stall
+            if (r.initialized) {
+                r.stale_cnt++;
+            } else {
+                r.stale_cnt--;
+            }
+            return r.stale_cnt;
+        }
+        // We advance
+        int read = DECR_MOD(writer, size);
+        reading_pos.store(read, std::memory_order_release);
+        reading = & data[read].value;
 
-  /****
-   * Helper functions for when movable
-   */
+        r.writer = writer;
+        r.next = writer;
+        r.stale_cnt = 0;
+        r.initialized = true;
+        return r.stale_cnt;
+    }
 
-  /**
-   * requires copy movable
-   */
-  int put(const T&& x) {
-      *writing = std::move(x);
-      return writer_advance();
-  }
+    /****
+     * Helper functions for when movable
+     */
 
-  /**
-   * requires move constructor
-   * Note that if stale, the return value is "empty" (has been moved already).
-   */
-  T pop(int& staleness) {
-      staleness = reader_advance();
-      return std::move(*reading);
-  }
+    /**
+     * Move the argument into the queue and advance the writer.
+     * @return staleness of this write.
+     */
+    inline
+    int put(const T&& x) {
+        *writing = std::move(x);
+        return writer_advance();
+    }
+
+    /**
+     * Move and return an element out of the queue and advance the reader.
+     * Note that after a pop the reading position is "empty (has been moved),
+     * thus, if a following pop is stale, the return value will be "empty".
+     * @param staleness: the staleness of this read.
+     */
+    inline
+    T pop(int& staleness) {
+        staleness = reader_advance();
+        return std::move(*reading);
+    }
 
     /****
      * Higher level easier to use when copying is possible and cheap
      */
+
+    /**
+     * Copy the argument into the queue and advance the writer.
+     * @return staleness of this write.
+     */
+    inline
     int put(const T& x) {
         *writing = x;
         return writer_advance();
     }
+
+    /**
+     * Return a copy of an element of the queue and advance the reader.
+     */
+    inline
     T get() {
-        reader_advance();
-        return *reading;
-    }
-    T get(int& staleness) {
-        staleness = reader_advance();
+        reader_advance_one();
         return *reading;
     }
 
+    /**
+    * Return a copy of the 'latest' element of the queue and advance the reader.
+    */
+    inline
+    T get_latest() {
+        reader_advance();
+        return *reading;
+    }
+
+    /**
+     * Return a copy of an element of the queue and advance the reader.
+     * @return the staleness of the reader
+     */
+    inline
+    T get(int& staleness) {
+        staleness = reader_advance_one();
+        return *reading;
+    }
+
+    /**
+    * Return a copy of an element of the queue and advance the reader.
+    * @return the staleness of the reader
+    */
+    inline
+    T get_latest(int& staleness) {
+      staleness = reader_advance();
+      return *reading;
+    }
+
+  //TODO blocking (spinning) put and get
+  //TODO staleness should be a uint ?
 };
