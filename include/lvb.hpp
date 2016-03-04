@@ -26,6 +26,7 @@ constexpr size_t slack_of_prod_ratio(size_t ratio) {
 template<typename T, size_t slack = 2>
 class Lvb {
 public:
+    static_assert(slack > 0, "Lvb queue slack has to be at least 1");
     static constexpr size_t size = slack + 2;
 private:
     struct alignas(L1CACHE_LINE_SIZE) Padded_T {
