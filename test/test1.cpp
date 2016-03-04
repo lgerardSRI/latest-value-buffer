@@ -20,6 +20,16 @@ bool spin_until_read(Lvb<T,size>& b, unsigned int max_spin) {
     return (n < max_spin); // the reader advanced
 }
 
+template<typename T, size_t size>
+bool spin_until_read_one(Lvb<T,size>& b, unsigned int max_spin) {
+    unsigned int n = 0;
+    while(b.reader_advance_one() && n < max_spin) {
+        n++;
+        std::this_thread::yield();
+    }
+    return (n < max_spin); // the reader advanced
+}
+
 
 /* Basic tests are single threaded.
  * They allow to assess the queue behavior. A read should be stale iff there
@@ -166,8 +176,10 @@ TEST(TwoThreads, Put1Get1) {
         ASSERT_TRUE(spin_until_read(b, maxspin));
         ASSERT_EQ(42, *b.reading);
     };
-    std::thread::thread(p).join();
-    std::thread::thread(c).join();
+    auto tp = std::thread::thread(p);
+    auto tc = std::thread::thread(c);
+    tp.join();
+    tc.join();
 }
 
 TEST(TwoThreads, SlackNPutNGetN) {
@@ -191,25 +203,52 @@ TEST(TwoThreads, SlackNPutNGetN) {
         } while (x < 99);
 
     };
-    std::thread::thread(p).join();
-    std::thread::thread(c).join();
+    auto tp = std::thread::thread(p);
+    auto tc = std::thread::thread(c);
+    tp.join();
+    tc.join();
 }
 
+TEST(TwoThreads, Slack1PutNGetN) {
+    Lvb<int> b;
+    //producer
+    std::function<void()> p = [&b](){
+        int i = 0;
+        while (i < 100000) {
+            if (!b.put(i)) {
+                i++;
+            }
+        }
+    };
+    //consummer
+    std::function<void()> c = [&b]() {
+        int x = 0;
+        int stale = 0;
+        // Give a headsup to prod to increase failure chances
+        std::this_thread::sleep_for(synclatency);
+        do {
+            b.get(stale);
+            if (!stale) {
+                ASSERT_EQ(x, *b.reading);
+                x++;
+            }
+        } while (x < 99999);
+    };
+    auto tp = std::thread::thread(p);
+    auto tc = std::thread::thread(c);
+    tp.join();
+    tc.join();
+}
+
+
 TEST(TwoThreads, SlackNPutMGetNp) {
-    Lvb<int, 50> b; // We use a queue of slack 50
+    Lvb<int> b;
     int last_commited = -1;
     int last_read = -2;
 
     //producer
     std::function<void()> p = [&](){
-        for(int i=0; i<100; i++) {
-            if (!b.put(i)) {
-                //we commited i
-                last_commited = i;
-            };
-        }
-        std::this_thread::sleep_for(synclatency);
-        for(int i=100; i<200; i++) {
+        for(int i=0; i<100000; i++) {
             if (!b.put(i)) {
                 //we commited i
                 last_commited = i;
@@ -223,11 +262,13 @@ TEST(TwoThreads, SlackNPutMGetNp) {
         while(spin_until_read(b, maxspin)) {
             last_read = *b.reading;
             ASSERT_LE(0, last_read);
-            ASSERT_LE(last_read, 199);
+            ASSERT_LE(last_read, 99999);
         }
     };
-    std::thread::thread(p).join();
-    std::thread::thread(c).join();
+    auto tp = std::thread::thread(p);
+    auto tc = std::thread::thread(c);
+    tp.join();
+    tc.join();
     ASSERT_EQ(last_read, last_commited);
 }
 
